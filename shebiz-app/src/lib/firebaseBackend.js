@@ -283,11 +283,20 @@ export const firebaseBackend = {
       ...(payload.history || []).slice(-8).map((m) => ({ role: m.role === 'ai' ? 'model' : 'user', parts: [{ text: String(m.text).slice(0, 1500) }] })),
       { role: 'user', parts: [{ text: String(payload.question).slice(0, 500) }] },
     ];
-    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${key}`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ systemInstruction: { parts: [{ text: system }] }, contents }),
-    });
-    if (!res.ok) throw fail('ai/failed', 'The assistant is unavailable right now.');
+    // Try a few model names so the assistant keeps working if one is retired. The key is sent in a header.
+    const models = ['gemini-flash-latest', 'gemini-2.5-flash', 'gemini-2.0-flash'];
+    let res = null; let lastErr = '';
+    for (const model of models) {
+      res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key },
+        body: JSON.stringify({ systemInstruction: { parts: [{ text: system }] }, contents }),
+      });
+      if (res.ok) break;
+      lastErr = `${model}: ${res.status} ${(await res.text()).slice(0, 300)}`;
+      console.warn('Gemini request failed ->', lastErr);
+      if (res.status === 400 || res.status === 401 || res.status === 403) break;
+    }
+    if (!res || !res.ok) throw fail('ai/failed', `The assistant is unavailable. ${lastErr.slice(0, 160)}`);
     const json = await res.json();
     const text = json.candidates?.[0]?.content?.parts?.map((x) => x.text).join('') || '';
     if (!text) throw fail('ai/empty', 'No answer was returned.');
