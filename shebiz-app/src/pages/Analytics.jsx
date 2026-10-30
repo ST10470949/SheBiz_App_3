@@ -1,0 +1,167 @@
+import React, { useMemo, useState } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
+import Icon from '../components/Icon.jsx';
+import { BarChart, Donut } from '../components/Charts.jsx';
+import { Drawer, EmptyState, Menu, PageHeader, Skeleton, Tilt, download, useToast } from '../components/ui.jsx';
+import { useApp } from '../state/store.jsx';
+import {
+  MONTHS_LONG, bestSellers, businessKpis, fmtPct, lastMonths, monthlySeries, profitSplit, rand,
+} from '../lib/metrics.js';
+import { ProductModal } from './bizParts.jsx';
+
+const SERIES = [
+  { key: 'sales', label: 'Sales', color: '#6938FF', light: '#9A7BFF' },
+  { key: 'expenses', label: 'Expenses', color: '#F0527D', light: '#FF8CA8' },
+];
+const SEG_COLORS = { profit: '#6938FF', ingredients: '#F0527D', other: '#F7BB43' };
+
+function Change({ v, goodWhenDown }) {
+  if (v === null || v === undefined) return <span className="flat">No change data yet</span>;
+  const good = goodWhenDown ? v <= 0 : v >= 0;
+  return <span className={good ? 'up' : 'down'}>{fmtPct(v)}</span>;
+}
+
+function ProductDrawer({ item, sales, onClose }) {
+  const list = sales.filter((s) => s.productId === item.productId).sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
+  return (
+    <Drawer title={item.name} onClose={onClose}>
+      <div className="grid-2" style={{ gap: 14 }}>
+        <div className="card" style={{ padding: 18 }}><div className="stat-label">Units sold (6 months)</div><div className="stat-num c-purple" style={{ margin: '10px 0 0' }}>{item.units}</div></div>
+        <div className="card" style={{ padding: 18 }}><div className="stat-label">Revenue (6 months)</div><div className="stat-num c-green" style={{ margin: '10px 0 0', fontSize: 26 }}>{rand(item.revenue)}</div></div>
+      </div>
+      <h3>Recent sales</h3>
+      {list.length === 0 && <p className="muted">No sales recorded for this product yet.</p>}
+      {list.slice(0, 40).map((s) => (
+        <div className="kv" key={s.id}>
+          <div><strong>{s.quantity} × {rand(s.unitPrice)}</strong><div className="muted small">{new Date(s.createdAt).toLocaleDateString('en-ZA', { day: 'numeric', month: 'short', year: 'numeric' })}{s.customerName ? ` · ${s.customerName}` : ''}</div></div>
+          <strong>{rand(s.total)}</strong>
+        </div>
+      ))}
+    </Drawer>
+  );
+}
+
+export default function Analytics() {
+  const { ready, profile, sales, expenses, products, customers } = useApp();
+  const nav = useNavigate();
+  const toast = useToast();
+  const now = useMemo(() => new Date(), []);
+  const [sel, setSel] = useState({ y: now.getFullYear(), m: now.getMonth() });
+  const [hidden, setHidden] = useState({});
+  const [drawer, setDrawer] = useState(null);
+  const [modal, setModal] = useState(null);
+
+  const monthOptions = useMemo(() => lastMonths(12, { y: now.getFullYear(), m: now.getMonth() }).reverse(), [now]);
+  const six = useMemo(() => lastMonths(6, sel), [sel]);
+  const kpi = useMemo(() => businessKpis({ sales, expenses, products, customers }, sel, now), [sales, expenses, products, customers, sel, now]);
+  const series = useMemo(() => monthlySeries(sales, expenses, six), [sales, expenses, six]);
+  const split = useMemo(() => profitSplit(expenses, sel, kpi.monthSales).map((s) => ({ ...s, color: SEG_COLORS[s.key] })), [expenses, sel, kpi.monthSales]);
+  const best = useMemo(() => bestSellers(sales, six, 3), [sales, six]);
+
+  if (!ready || !profile) return <><PageHeader title="Business analytics" /><div className="grid-3">{[0, 1, 2].map((i) => <Skeleton key={i} h={120} r={24} />)}</div></>;
+
+  const bizName = profile.business?.name || 'your business';
+  const label = `${MONTHS_LONG[sel.m]} ${sel.y}`;
+  const hasData = kpi.monthSales > 0 || kpi.monthExpenses > 0;
+  const top = best[0];
+  const series2 = SERIES.map((s) => ({ ...s, visible: !hidden[s.key] }));
+  const allHidden = series2.every((s) => !s.visible);
+
+  const exportReport = () => {
+    const lines = [
+      `${bizName} - business report for ${label}`, '='.repeat(52), '',
+      `Sales:     ${rand(kpi.monthSales)}  (${fmtPct(kpi.salesChange)} vs previous month)`,
+      `Expenses:  ${rand(kpi.monthExpenses)}  (${fmtPct(kpi.expensesChange)} vs previous month)`,
+      `Profit:    ${rand(kpi.profit)}  (${fmtPct(kpi.profitChange)} vs previous month)`,
+      `Margin:    ${kpi.margin}%`, '', 'Monthly performance', '-------------------',
+      ...series.map((s) => `${s.label.padEnd(4)} Sales ${rand(s.sales).padStart(9)}   Expenses ${rand(s.expenses).padStart(9)}   Profit ${rand(s.profit).padStart(9)}`),
+      '', 'Profit split', '------------', ...split.map((s) => `${s.label.padEnd(18)} ${String(s.pct).padStart(3)}%  ${rand(s.value)}`),
+      '', 'Best-selling products (last 6 months)', '-------------------------------------',
+      ...(best.length ? best.map((b, i) => `${i + 1}. ${b.name} - ${b.units} sold (${rand(b.revenue)})`) : ['No product sales recorded.']),
+      '', `Generated by SheBiz on ${new Date().toLocaleDateString('en-ZA')}`,
+    ];
+    download(`shebiz-report-${sel.y}-${String(sel.m + 1).padStart(2, '0')}.txt`, lines.join('\n'), 'text/plain');
+    toast.success('Report downloaded');
+  };
+
+  return (
+    <>
+      <PageHeader title="Business analytics" subtitle={`Track sales, expenses and profit for ${bizName}.`}>
+        <button className="btn btn-ghost btn-sm" onClick={exportReport}><Icon name="download" size={14} /> Export report</button>
+        <Menu align="right" trigger={({ toggle }) => <button className="btn btn-soft" onClick={toggle} aria-label="Choose month">{label} <Icon name="chevronDown" size={14} /></button>}
+          items={monthOptions.map((o) => ({ label: `${MONTHS_LONG[o.m]} ${o.y}`, active: o.y === sel.y && o.m === sel.m, onClick: () => setSel({ y: o.y, m: o.m }) }))} />
+      </PageHeader>
+
+      <div className="grid-3" style={{ marginBottom: 24 }}>
+        <Tilt className="card stat-card"><div className="stat-label">Sales</div><div className="stat-num c-purple">{rand(kpi.monthSales)}</div><Change v={kpi.salesChange} /></Tilt>
+        <Tilt className="card stat-card"><div className="stat-label">Expenses</div><div className="stat-num c-red">{rand(kpi.monthExpenses)}</div><Change v={kpi.expensesChange} goodWhenDown /></Tilt>
+        <Tilt className="card stat-card"><div className="stat-label">Profit</div><div className={`stat-num ${kpi.profit < 0 ? 'c-red' : 'c-green'}`}>{rand(kpi.profit)}</div><Change v={kpi.profitChange} /></Tilt>
+      </div>
+
+      <div className="split-2-1" style={{ marginBottom: 24 }}>
+        <div className="card">
+          <div className="row between" style={{ flexWrap: 'wrap', marginBottom: 8 }}>
+            <h2 style={{ margin: 0 }}>Monthly performance</h2>
+            <div className="legend" role="group" aria-label="Chart series">
+              {SERIES.map((s) => (
+                <button key={s.key} className={hidden[s.key] ? 'off' : ''} aria-pressed={!hidden[s.key]} onClick={() => setHidden({ ...hidden, [s.key]: !hidden[s.key] })} style={{ color: s.color }}>
+                  <i style={{ background: s.color }} />{s.label}
+                </button>
+              ))}
+            </div>
+          </div>
+          {allHidden ? <EmptyState icon="chart" title="Both series are hidden" text="Turn Sales or Expenses back on using the legend above." /> : <BarChart data={series} series={series2} />}
+        </div>
+        <div className="card">
+          <h2>Profit split</h2>
+          {!hasData ? <EmptyState icon="chart" title="No data for this month" text="Record a sale or an expense to see your profit split." /> : (
+            <>
+              <Donut segments={split} centerLabel={`${split[0].pct}%`} centerSub="profit" />
+              <div className="stack" style={{ gap: 8, marginTop: 14 }}>
+                {split.map((s) => <div className="row between" key={s.key}><span className="row" style={{ gap: 8 }}><i style={{ width: 10, height: 10, borderRadius: '50%', background: s.color, display: 'inline-block' }} />{s.label}</span><strong>{s.pct}% · {rand(s.value)}</strong></div>)}
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+
+      <div className="split-2-1">
+        <div className="card">
+          <h2>Best-selling products</h2>
+          <p className="muted small" style={{ margin: '-8px 0 12px' }}>Last 6 months, by units sold</p>
+          {best.length === 0 ? <EmptyState icon="bag" title="No product sales yet" text="Record sales from the Business manager and your best sellers appear here." action={<Link to="/my-business/manager?tab=sale" className="btn btn-sm" style={{ textDecoration: 'none' }}>Record a sale</Link>} /> : best.map((b, i) => (
+            <button key={b.productId} className="list-row" onClick={() => setDrawer(b)} aria-label={`${b.name}, ${b.units} sold. View sales`}>
+              <span className="rank">{i + 1}</span>
+              <strong className="grow">{b.name}</strong>
+              <span className="muted">{b.units} sold</span>
+              <Icon name="chevronRight" size={16} />
+            </button>
+          ))}
+        </div>
+        <div className="insight">
+          <div className="eyebrow-p" style={{ color: 'var(--ink)' }}><Icon name="sparkle" size={20} className="c-gold" /> GROWTH INSIGHT</div>
+          {top ? (
+            <>
+              <h3>{top.name} lead sales</h3>
+              <p className="muted">Consider promoting party boxes and checking ingredient stock.</p>
+            </>
+          ) : (
+            <>
+              <h3>Record a few sales</h3>
+              <p className="muted">Once you have sales, SheBiz shows your top seller and suggests how to grow it.</p>
+            </>
+          )}
+          {kpi.salesChange !== null && kpi.salesChange > 0 && <strong className="c-green">{fmtPct(kpi.salesChange)} monthly growth</strong>}
+          {kpi.salesChange !== null && kpi.salesChange < 0 && <strong className="c-red">{fmtPct(kpi.salesChange)} vs last month. Try a weekend special.</strong>}
+          <div className="row-wrap" style={{ marginTop: 'auto', paddingTop: 10 }}>
+            <button className="btn btn-sm" onClick={() => setModal('party')}>Create party box</button>
+            <button className="btn btn-ghost btn-sm" onClick={() => nav('/my-business/manager?tab=products')}>Check stock</button>
+          </div>
+        </div>
+      </div>
+
+      {drawer && <ProductDrawer item={drawer} sales={sales} onClose={() => setDrawer(null)} />}
+      {modal === 'party' && <ProductModal preset={{ name: 'Party Box', description: '24 mini cupcakes', price: 340, stock: 5 }} onClose={() => setModal(null)} />}
+    </>
+  );
+}

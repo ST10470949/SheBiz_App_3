@@ -1,0 +1,40 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() { return request.auth != null; }
+    function owner(uid) { return signedIn() && request.auth.uid == uid; }
+
+    match /users/{uid} {
+      allow read, delete: if owner(uid);
+      allow create: if owner(uid) && !('emailVerified' in request.resource.data);
+      // emailVerified can only be changed by the verifyCode function (Admin SDK)
+      allow update: if owner(uid) && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['emailVerified']);
+
+      // data the user owns completely
+      match /{coll}/{id} {
+        allow read, write: if owner(uid) && coll in ['products', 'sales', 'expenses', 'customers', 'notifications', 'courseProgress', 'applications', 'saved', 'aiChats'];
+      }
+      // a user can ask for a mentor, but only a mentor/admin can accept (status stays "Requested" from the client)
+      match /mentorships/{id} {
+        allow read, delete: if owner(uid);
+        allow create: if owner(uid) && request.resource.data.status == 'Requested';
+        allow update: if owner(uid) && request.resource.data.status == resource.data.status;
+      }
+      // users write their own messages only; mentor replies come from the admin side
+      match /messages/{id} {
+        allow read, delete: if owner(uid);
+        allow create: if owner(uid) && request.resource.data.senderId == 'me';
+      }
+    }
+
+    // shared listings: public read so visitors can browse, writes only from the admin script / console
+    match /opportunities/{id} { allow read: if true; allow write: if false; }
+    match /mentors/{id}       { allow read: if true; allow write: if false; }
+    match /courses/{id}       { allow read: if signedIn(); allow write: if false; }
+
+    match /support/{id} { allow create: if signedIn() && request.resource.data.uid == request.auth.uid; allow read, update, delete: if false; }
+
+    match /verifications/{id} { allow read, write: if false; }
+    match /mail/{id}          { allow read, write: if false; }
+  }
+}
