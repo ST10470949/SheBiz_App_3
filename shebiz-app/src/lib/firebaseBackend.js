@@ -284,12 +284,12 @@ export const firebaseBackend = {
       { role: 'user', parts: [{ text: String(payload.question).slice(0, 500) }] },
     ];
     // Try a few model names so the assistant keeps working if one is retired. The key is sent in a header.
-    const models = ['gemini-flash-latest', 'gemini-2.5-flash', 'gemini-2.0-flash'];
+    const models = ['gemini-2.5-flash-lite', 'gemini-2.5-flash', 'gemini-flash-latest'];
     let res = null; let lastErr = '';
     for (const model of models) {
       res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
         method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key },
-        body: JSON.stringify({ systemInstruction: { parts: [{ text: system }] }, contents }),
+        body: JSON.stringify({ systemInstruction: { parts: [{ text: system }] }, contents, generationConfig: { maxOutputTokens: 700 } }),
       });
       if (res.ok) break;
       lastErr = `${model}: ${res.status} ${(await res.text()).slice(0, 300)}`;
